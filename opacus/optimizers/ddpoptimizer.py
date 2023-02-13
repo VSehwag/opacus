@@ -38,6 +38,7 @@ class DistributedDPOptimizer(DPOptimizer):
         loss_reduction: str = "mean",
         generator=None,
         secure_mode: bool = False,
+        augmult: int = 0,     
     ):
         super().__init__(
             optimizer,
@@ -47,6 +48,7 @@ class DistributedDPOptimizer(DPOptimizer):
             loss_reduction=loss_reduction,
             generator=generator,
             secure_mode=secure_mode,
+            augmult=augmult,
         )
         self.rank = torch.distributed.get_rank()
         self.world_size = torch.distributed.get_world_size()
@@ -66,6 +68,38 @@ class DistributedDPOptimizer(DPOptimizer):
             torch.distributed.all_reduce(p.grad, op=torch.distributed.ReduceOp.SUM)
             if self.loss_reduction == "mean":
                 p.grad /= self.world_size
+
+    def inner_step(
+        self, closure: Optional[Callable[[], float]] = None
+    ) -> Optional[torch.Tensor]:
+        if len(self.grad_samples[0]) == 0:
+            # Empty batch
+            per_sample_clip_factor = torch.zeros((0,))
+        else:
+            per_param_norms = [
+                g.reshape(len(g), -1).norm(2, dim=-1) for g in self.grad_samples
+            ]
+            per_sample_norms = torch.stack(per_param_norms, dim=1).norm(2, dim=1)
+            per_sample_clip_factor = 1
+
+        for p in self.params:
+            _check_processed_flag(p.grad_sample)
+            grad_sample = self._get_flat_grad_sample(p)
+            grad = contract("i,i...", per_sample_clip_factor, grad_sample)
+
+            if p.grad is not None:
+                p.grad += grad
+            else:
+                p.grad = grad
+
+            _mark_as_processed(p.grad_sample)
+        if self.loss_reduction == "mean":
+            for p in self.params:
+                p.grad /= self.expected_batch_size * self.accumulated_iterations
+
+        return self.original_optimizer.step(closure)
+
+
 
     def step(
         self, closure: Optional[Callable[[], float]] = None

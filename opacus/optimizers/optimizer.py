@@ -204,6 +204,7 @@ class DPOptimizer(Optimizer):
         loss_reduction: str = "mean",
         generator=None,
         secure_mode: bool = False,
+        augmult: int = 0,        
     ):
         """
 
@@ -239,6 +240,7 @@ class DPOptimizer(Optimizer):
         self.step_hook = None
         self.generator = generator
         self.secure_mode = secure_mode
+        self.augmult = augmult
 
         self.param_groups = self.original_optimizer.param_groups
         self.defaults = self.original_optimizer.defaults
@@ -388,11 +390,17 @@ class DPOptimizer(Optimizer):
 
         self.step_hook = fn
 
+    def preprosess_grads(self):
+        for p in self.params:
+            p.grad_sample = p.grad_sample.view(p.grad_sample.shape[0]//max(1,self.augmult), self.augmult, *(i for i in p.grad_sample.shape[1:])).mean(dim=1)
+
     def clip_and_accumulate(self):
         """
         Performs gradient clipping.
         Stores clipped and aggregated gradients into `p.summed_grad```
         """
+        if self.augmult > 1:
+            self.preprosess_grads()
 
         if len(self.grad_samples[0]) == 0:
             # Empty batch
