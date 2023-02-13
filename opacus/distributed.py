@@ -52,6 +52,7 @@ class DifferentiallyPrivateDistributedDataParallel(nn.Module):
                 torch.distributed.broadcast(p.data, 0)
 
         self.module = model
+        self.device = model.device
 
     def forward(self, *args, **kwargs):
         return self.module(*args, **kwargs)
